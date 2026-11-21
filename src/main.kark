@@ -7,6 +7,7 @@
 // the recorded checkpoint with an expected count. Commands come from
 // data/commands.dat; a report is written to data/report.dat.
 // Builtins only; relative paths only.
+import staged_pipeline
 
 func find_pipeline(state, name) {
     let i = 0
@@ -167,4 +168,5 @@ func main() {
     persist("data/state.dat", state)
     persist("data/report.dat", split(report, "\n"))
     print("DATA_PIPELINE_OK pipelines=" + str(len(state)))
+    staged_pipeline.r2_run()
 }

@@ -1,0 +1,295 @@
+// Karkain Data Pipeline - Round 2: staged execution with checkpoints.
+// Pipeline record in data/r2_state.dat:
+//   name|source|dest|col|factor|stage|rows
+// Stages run EXTRACT(1) -> VALIDATE(2) -> TRANSFORM(3) -> LOAD(4). Each
+// successful stage advances `stage` and is written to data/r2_checkpoint.dat.
+// A failed stage emits an error record in data/r2_errors.dat and leaves the
+// checkpoint at the last successful stage. RECOVER resumes at checkpoint+1.
+// No Round 1 files are touched.
+
+func r2_find(state, name) {
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == name) { return state[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+func r2_new(name) {
+    return name + "|NONE|NONE|0|1|0|0"
+}
+
+func r2_set_field(rec, idx, val) {
+    let f = split(rec, "|")
+    let out = ""
+    let i = 0
+    while (i < len(f)) {
+        if (i > 0) { out = out + "|" }
+        if (i == idx) { out = out + val } else { out = out + f[i] }
+        i = i + 1
+    }
+    return out
+}
+
+func r2_upsert(state, rec) {
+    let name = split(rec, "|")[0]
+    let out = []
+    let replaced = 0
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == name) { push(out, rec); replaced = 1 } else { push(out, state[i]) }
+        i = i + 1
+    }
+    if (replaced == 0) { push(out, rec) }
+    return out
+}
+
+func r2_stage_name(n) {
+    if (n == 1) { return "EXTRACT" }
+    if (n == 2) { return "VALIDATE" }
+    if (n == 3) { return "TRANSFORM" }
+    if (n == 4) { return "LOAD" }
+    return "NONE"
+}
+
+func r2_append_error(name, stage, reason, row) {
+    let txt = readFile("data/r2_errors.dat")
+    writeFile("data/r2_errors.dat", txt + name + "|" + stage + "|" + reason + "|" + row + "\n")
+}
+
+func r2_update_stage(state, name, stage, rows) {
+    let rec = r2_find(state, name)
+    rec = r2_set_field(rec, 5, str(stage))
+    rec = r2_set_field(rec, 6, str(rows))
+    writeFile("data/r2_checkpoint.dat", name + "|" + str(stage) + "|" + str(rows) + "\n")
+    return r2_upsert(state, rec)
+}
+
+func r2_extract(name, rec) {
+    let d = split(rec, "|")
+    let txt = readFile(d[1])
+    if (txt == "") { return "FAIL|empty source|0" }
+    let lines = split(txt, "\n")
+    let out = ""
+    let n = 0
+    let i = 0
+    while (i < len(lines)) {
+        let line = trim(lines[i])
+        if (line != "") {
+            if (n > 0) { out = out + "\n" }
+            out = out + line
+            n = n + 1
+        }
+        i = i + 1
+    }
+    if (n == 0) { return "FAIL|no rows|0" }
+    writeFile("data/r2_work.csv", out + "\n")
+    print("STAGE " + name + " EXTRACT rows=" + str(n))
+    return "OK|" + str(n)
+}
+
+func r2_validate_stage(name, rec) {
+    let d = split(rec, "|")
+    let col = int(d[3])
+    let lines = split(readFile("data/r2_work.csv"), "\n")
+    let out = ""
+    let n = 0
+    let i = 0
+    while (i < len(lines)) {
+        let line = trim(lines[i])
+        if (line != "") {
+            let cells = split(line, ",")
+            if (col >= len(cells)) { return "FAIL|missing column|" + str(i) }
+            let t = trim(cells[col])
+            if (str(int(t)) != t) { return "FAIL|non-numeric value|" + str(i) }
+            if (n > 0) { out = out + "\n" }
+            out = out + line
+            n = n + 1
+        }
+        i = i + 1
+    }
+    if (n == 0) { return "FAIL|no rows|0" }
+    writeFile("data/r2_valid.csv", out + "\n")
+    print("STAGE " + name + " VALIDATE rows=" + str(n))
+    return "OK|" + str(n)
+}
+
+func r2_transform_stage(name, rec) {
+    let d = split(rec, "|")
+    let col = int(d[3])
+    let factor = d[4]
+    if (str(int(factor)) != factor) { return "FAIL|bad factor|0" }
+    let f = int(factor)
+    let lines = split(readFile("data/r2_valid.csv"), "\n")
+    let out = ""
+    let n = 0
+    let i = 0
+    while (i < len(lines)) {
+        let line = trim(lines[i])
+        if (line != "") {
+            let cells = split(line, ",")
+            let row = ""
+            let c = 0
+            while (c < len(cells)) {
+                if (c > 0) { row = row + "," }
+                if (c == col) { row = row + str(int(cells[c]) * f) } else { row = row + cells[c] }
+                c = c + 1
+            }
+            if (n > 0) { out = out + "\n" }
+            out = out + row
+            n = n + 1
+        }
+        i = i + 1
+    }
+    writeFile("data/r2_transformed.csv", out + "\n")
+    print("STAGE " + name + " TRANSFORM factor=" + factor + " rows=" + str(n))
+    return "OK|" + str(n)
+}
+
+func r2_load_stage(name, rec) {
+    let d = split(rec, "|")
+    let out = readFile("data/r2_transformed.csv")
+    writeFile(d[2], out)
+    let back = readFile(d[2])
+    let verified = 0
+    if (back == out) { verified = 1 }
+    let lines = split(back, "\n")
+    let n = 0
+    let i = 0
+    while (i < len(lines)) {
+        if (trim(lines[i]) != "") { n = n + 1 }
+        i = i + 1
+    }
+    if (verified == 0 || n == 0) { return "FAIL|verify failed|0" }
+    print("STAGE " + name + " LOAD rows=" + str(n) + " verified=1")
+    return "OK|" + str(n)
+}
+
+func r2_run_stages(state, name, from, to) {
+    let rec = r2_find(state, name)
+    let st = from
+    let failed = 0
+    while (st <= to && failed == 0) {
+        let res = ""
+        if (st == 1) { res = r2_extract(name, rec) }
+        if (st == 2) { res = r2_validate_stage(name, rec) }
+        if (st == 3) { res = r2_transform_stage(name, rec) }
+        if (st == 4) { res = r2_load_stage(name, rec) }
+        let p = split(res, "|")
+        if (p[0] == "OK") {
+            let nr = 0
+            if (len(p) > 1) { nr = int(p[1]) }
+            state = r2_update_stage(state, name, st, nr)
+        } else {
+            let reason = p[1]
+            let rowidx = "0"
+            if (len(p) > 2) { rowidx = p[2] }
+            r2_append_error(name, r2_stage_name(st), reason, rowidx)
+            print("ERROR_RECORD " + name + " stage=" + r2_stage_name(st) + " reason=" + reason + " row=" + rowidx)
+            failed = 1
+        }
+        st = st + 1
+    }
+    return state
+}
+
+func r2_persist(path, lines) {
+    let out = ""
+    let i = 0
+    while (i < len(lines)) {
+        out = out + lines[i] + "\n"
+        i = i + 1
+    }
+    writeFile(path, out)
+}
+
+public func r2_run() {
+    writeFile("data/r2_errors.dat", "")
+    let cmds = split(readFile("data/r2_commands.dat"), "\n")
+    let state = split(readFile("data/r2_state.dat"), "\n")
+    if (len(state) == 1) {
+        if (trim(state[0]) == "") { state = [] }
+    }
+    let report = ""
+    let i = 0
+    while (i < len(cmds)) {
+        let line = trim(cmds[i])
+        if (line != "") {
+            let f = split(line, "|")
+            let op = f[0]
+            if (op == "SOURCE" || op == "DEST" || op == "TRANSFORM") {
+                let rec = r2_find(state, f[1])
+                if (rec == "") { rec = r2_new(f[1]) }
+                if (op == "SOURCE") { rec = r2_set_field(rec, 1, f[2]) }
+                if (op == "DEST") { rec = r2_set_field(rec, 2, f[2]) }
+                if (op == "TRANSFORM") { rec = r2_set_field(rec, 3, f[2]); rec = r2_set_field(rec, 4, f[3]) }
+                state = r2_upsert(state, rec)
+                let msg = op + " " + f[1] + " " + f[2]
+                if (op == "TRANSFORM") { msg = "TRANSFORM " + f[1] + " col=" + f[2] + " factor=" + f[3] }
+                print(msg)
+                report = report + msg + "\n"
+            }
+            if (op == "RUN") {
+                let rec = r2_find(state, f[1])
+                if (rec == "") {
+                    print("ERROR unknown pipeline " + f[1])
+                } else {
+                    state = r2_update_stage(state, f[1], 0, 0)
+                    state = r2_run_stages(state, f[1], 1, 4)
+                    let cp = int(split(r2_find(state, f[1]), "|")[5])
+                    let status = "FAIL"
+                    if (cp == 4) { status = "OK" }
+                    let msg = "RUN " + f[1] + " status=" + status + " checkpoint=" + str(cp)
+                    print(msg)
+                    report = report + msg + "\n"
+                }
+            }
+            if (op == "RECOVER") {
+                let rec = r2_find(state, f[1])
+                if (rec == "") {
+                    print("ERROR unknown pipeline " + f[1])
+                } else {
+                    let cp = int(split(rec, "|")[5])
+                    if (cp >= 4) {
+                        let msg = "RECOVER " + f[1] + " status=NOOP checkpoint=4"
+                        print(msg)
+                        report = report + msg + "\n"
+                    } else {
+                        let resume = cp + 1
+                        let msg = "RECOVER " + f[1] + " resume=" + r2_stage_name(resume) + " from_checkpoint=" + str(cp)
+                        print(msg)
+                        report = report + msg + "\n"
+                        state = r2_run_stages(state, f[1], resume, 4)
+                        let ncp = int(split(r2_find(state, f[1]), "|")[5])
+                        let status = "FAIL"
+                        if (ncp == 4) { status = "OK" }
+                        let msg2 = "RECOVER " + f[1] + " status=" + status + " checkpoint=" + str(ncp)
+                        print(msg2)
+                        report = report + msg2 + "\n"
+                    }
+                }
+            }
+            if (op == "CHECKPOINT") {
+                let rec = r2_find(state, f[1])
+                if (rec == "") {
+                    print("ERROR unknown pipeline " + f[1])
+                } else {
+                    let cp = int(split(rec, "|")[5])
+                    let expected = int(f[2])
+                    let ok = 0
+                    if (cp == expected) { ok = 1 }
+                    let msg = "CHECKPOINT " + f[1] + " expected=" + f[2] + " actual=" + str(cp) + " ok=" + str(ok)
+                    print(msg)
+                    report = report + msg + "\n"
+                }
+            }
+        }
+        i = i + 1
+    }
+    r2_persist("data/r2_state.dat", state)
+    r2_persist("data/r2_report.dat", split(report, "\n"))
+    print("R2_PIPELINE_OK pipelines=" + str(len(state)))
+}

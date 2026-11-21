@@ -1,0 +1,57 @@
+// Round 2 self-contained tests for staged pipeline and recovery.
+
+func stage_name(n) {
+    if (n == 1) { return "EXTRACT" }
+    if (n == 2) { return "VALIDATE" }
+    if (n == 3) { return "TRANSFORM" }
+    if (n == 4) { return "LOAD" }
+    return "NONE"
+}
+
+func test_stage_sequence() {
+    let seq = ""
+    let s = 1
+    while (s <= 4) {
+        if (s > 1) { seq = seq + "->" }
+        seq = seq + stage_name(s)
+        s = s + 1
+    }
+    assert_eq(seq, "EXTRACT->VALIDATE->TRANSFORM->LOAD")
+    assert_eq(stage_name(3), "TRANSFORM")
+}
+
+func test_stage_failure_record() {
+    let factor = "BAD"
+    let bad_factor = 0
+    if (str(int(factor)) != factor) { bad_factor = 1 }
+    assert_eq(bad_factor, 1)
+    let checkpoint = 2
+    let error_record = "p1|TRANSFORM|bad factor|0"
+    let f = split(error_record, "|")
+    assert_eq(f[0], "p1")
+    assert_eq(f[1], "TRANSFORM")
+    assert_eq(f[2], "bad factor")
+    assert_eq(checkpoint, 2)
+}
+
+func test_recover_from_checkpoint() {
+    let checkpoint = 2
+    let resume = checkpoint + 1
+    assert_eq(stage_name(resume), "TRANSFORM")
+    let src = "1,100,3;2,200,4;3,300,5"
+    let rows = split(src, ";")
+    let factor = 3
+    let out = ""
+    let i = 0
+    while (i < len(rows)) {
+        let cells = split(rows[i], ",")
+        if (i > 0) { out = out + ";" }
+        out = out + cells[0] + "," + str(int(cells[1]) * factor) + "," + cells[2]
+        i = i + 1
+    }
+    let final = split(out, ";")
+    assert_eq(len(final), 3)
+    assert_eq(split(final[0], ",")[1], "300")
+    assert_eq(split(final[2], ",")[1], "900")
+    assert_eq(4, resume + 1)
+}

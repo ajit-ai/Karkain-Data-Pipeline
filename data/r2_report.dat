@@ -1,0 +1,12 @@
+SOURCE p1 data/r2_source.csv
+DEST p1 data/r2_dest.csv
+TRANSFORM p1 col=1 factor=2
+RUN p1 status=OK checkpoint=4
+CHECKPOINT p1 expected=4 actual=4 ok=1
+TRANSFORM p1 col=1 factor=BAD
+RUN p1 status=FAIL checkpoint=2
+CHECKPOINT p1 expected=2 actual=2 ok=1
+TRANSFORM p1 col=1 factor=3
+RECOVER p1 resume=TRANSFORM from_checkpoint=2
+RECOVER p1 status=OK checkpoint=4
+CHECKPOINT p1 expected=4 actual=4 ok=1
