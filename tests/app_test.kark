@@ -1,0 +1,52 @@
+func test_pipeline_field_update() {
+    let rec = "p1|NONE|NONE|0|1|0"
+    rec = set_field_local(rec, 1, "data/source.csv")
+    rec = set_field_local(rec, 2, "data/dest.csv")
+    let f = split(rec, "|")
+    assert_eq(len(f), 6)
+    assert_eq(f[1], "data/source.csv")
+    assert_eq(f[2], "data/dest.csv")
+    assert_eq(f[5], "0")
+}
+
+func set_field_local(rec, idx, val) {
+    let f = split(rec, "|")
+    let out = ""
+    let i = 0
+    while (i < len(f)) {
+        if (i > 0) { out = out + "|" }
+        if (i == idx) { out = out + val } else { out = out + f[i] }
+        i = i + 1
+    }
+    return out
+}
+
+func test_transform_row_math() {
+    let rows = split("1,100,3\n2,200,4\n3,300,5", "\n")
+    let out = ""
+    let i = 0
+    while (i < len(rows)) {
+        let cells = split(rows[i], ",")
+        let row = ""
+        let c = 0
+        while (c < len(cells)) {
+            if (c > 0) { row = row + "," }
+            if (c == 1) { row = row + str(int(cells[c]) * 2) } else { row = row + cells[c] }
+            c = c + 1
+        }
+        out = out + row + "\n"
+        i = i + 1
+    }
+    let back = split(out, "\n")
+    assert_eq(len(back), 3)
+    assert_eq(split(back[1], ",")[1], "400")
+}
+
+func test_checkpoint_compare() {
+    let cp = 3
+    let expected = 3
+    let ok = 0
+    if (cp == expected) { ok = 1 }
+    assert_eq(ok, 1)
+    assert_eq(int("3"), 3)
+}

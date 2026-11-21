@@ -1,0 +1,170 @@
+// Karkain Data Pipeline - first functional slice.
+// A pipeline is a pipe-delimited record in data/state.dat:
+//   name|source|dest|col|factor|checkpoint
+// SOURCE/DEST/TRANSFORM configure it, RUN reads the source file, applies a
+// numeric transform to one column, writes the destination file, reads it back
+// and verifies the transfer, then records the checkpoint. CHECKPOINT compares
+// the recorded checkpoint with an expected count. Commands come from
+// data/commands.dat; a report is written to data/report.dat.
+// Builtins only; relative paths only.
+
+func find_pipeline(state, name) {
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == name) { return state[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+func new_pipeline(name) {
+    return name + "|NONE|NONE|0|1|0"
+}
+
+func set_field(rec, idx, val) {
+    let f = split(rec, "|")
+    let out = ""
+    let i = 0
+    while (i < len(f)) {
+        if (i > 0) { out = out + "|" }
+        if (i == idx) { out = out + val } else { out = out + f[i] }
+        i = i + 1
+    }
+    return out
+}
+
+func upsert_pipeline(state, rec) {
+    let name = split(rec, "|")[0]
+    let out = []
+    let replaced = 0
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == name) { push(out, rec); replaced = 1 } else { push(out, state[i]) }
+        i = i + 1
+    }
+    if (replaced == 0) { push(out, rec) }
+    return out
+}
+
+func run_pipeline(state, name) {
+    let rec = find_pipeline(state, name)
+    if (rec == "") { print("ERROR unknown pipeline " + name); return state }
+    let f = split(rec, "|")
+    let src = f[1]
+    let dst = f[2]
+    let col = int(f[3])
+    let factor = int(f[4])
+    let lines = split(readFile(src), "\n")
+    let out = ""
+    let rows = 0
+    let i = 0
+    while (i < len(lines)) {
+        let line = trim(lines[i])
+        if (line != "") {
+            let cells = split(line, ",")
+            let row = ""
+            let c = 0
+            while (c < len(cells)) {
+                if (c > 0) { row = row + "," }
+                if (c == col) { row = row + str(int(cells[c]) * factor) } else { row = row + cells[c] }
+                c = c + 1
+            }
+            out = out + row + "\n"
+            rows = rows + 1
+        }
+        i = i + 1
+    }
+    writeFile(dst, out)
+    let actual = readFile(dst)
+    let verified = 0
+    if (actual == out) { verified = 1 }
+    let back = split(actual, "\n")
+    let written = 0
+    let k = 0
+    while (k < len(back)) {
+        if (trim(back[k]) != "") { written = written + 1 }
+        k = k + 1
+    }
+    if (written != rows) { verified = 0 }
+    let ns = upsert_pipeline(state, set_field(rec, 5, str(rows)))
+    print("RUN " + name + " rows=" + str(rows) + " verified=" + str(verified))
+    return ns
+}
+
+func persist(path, lines) {
+    let out = ""
+    let i = 0
+    while (i < len(lines)) {
+        out = out + lines[i] + "\n"
+        i = i + 1
+    }
+    writeFile(path, out)
+}
+
+func main() {
+    let cmds = split(readFile("data/commands.dat"), "\n")
+    let state = split(readFile("data/state.dat"), "\n")
+    let report = ""
+    let i = 0
+    while (i < len(cmds)) {
+        let line = trim(cmds[i])
+        if (line != "") {
+            let f = split(line, "|")
+            let op = f[0]
+            if (op == "SOURCE") {
+                let rec = find_pipeline(state, f[1])
+                if (rec == "") { rec = new_pipeline(f[1]) }
+                rec = set_field(rec, 1, f[2])
+                state = upsert_pipeline(state, rec)
+                let msg = "SOURCE " + f[1] + " " + f[2]
+                print(msg)
+                report = report + msg + "\n"
+            }
+            if (op == "DEST") {
+                let rec = find_pipeline(state, f[1])
+                if (rec == "") { rec = new_pipeline(f[1]) }
+                rec = set_field(rec, 2, f[2])
+                state = upsert_pipeline(state, rec)
+                let msg = "DEST " + f[1] + " " + f[2]
+                print(msg)
+                report = report + msg + "\n"
+            }
+            if (op == "TRANSFORM") {
+                let rec = find_pipeline(state, f[1])
+                if (rec == "") { rec = new_pipeline(f[1]) }
+                rec = set_field(rec, 3, f[2])
+                rec = set_field(rec, 4, f[3])
+                state = upsert_pipeline(state, rec)
+                let msg = "TRANSFORM " + f[1] + " col=" + f[2] + " factor=" + f[3]
+                print(msg)
+                report = report + msg + "\n"
+            }
+            if (op == "RUN") {
+                state = run_pipeline(state, f[1])
+                let rec = find_pipeline(state, f[1])
+                let cp = split(rec, "|")[5]
+                report = report + "RUN " + f[1] + " checkpoint=" + cp + "\n"
+            }
+            if (op == "CHECKPOINT") {
+                let rec = find_pipeline(state, f[1])
+                if (rec == "") {
+                    print("ERROR unknown pipeline " + f[1])
+                } else {
+                    let cp = int(split(rec, "|")[5])
+                    let expected = int(f[2])
+                    let ok = 0
+                    if (cp == expected) { ok = 1 }
+                    let msg = "CHECKPOINT " + f[1] + " expected=" + f[2] + " actual=" + str(cp) + " ok=" + str(ok)
+                    print(msg)
+                    report = report + msg + "\n"
+                }
+            }
+        }
+        i = i + 1
+    }
+    persist("data/state.dat", state)
+    persist("data/report.dat", split(report, "\n"))
+    print("DATA_PIPELINE_OK pipelines=" + str(len(state)))
+}

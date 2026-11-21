@@ -1,0 +1,5 @@
+SOURCE|p1|data/source.csv
+DEST|p1|data/dest.csv
+TRANSFORM|p1|1|2
+RUN|p1
+CHECKPOINT|p1|3

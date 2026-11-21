@@ -1,0 +1,5 @@
+SOURCE p1 data/source.csv
+DEST p1 data/dest.csv
+TRANSFORM p1 col=1 factor=2
+RUN p1 checkpoint=3
+CHECKPOINT p1 expected=3 actual=3 ok=1
